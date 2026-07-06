@@ -105,10 +105,22 @@ RUN for f in /tmp/reqs/requirements.txt /tmp/reqs/py-requirements.txt; do \\
 # -------------------------------------------------------------------
 ARG HOST_UID=1000
 ARG HOST_GID=1000
-RUN userdel -r ubuntu 2>/dev/null || true \\
-    && groupadd -f -g \${HOST_GID} developer \\
-    && useradd -m -u \${HOST_UID} -g \${HOST_GID} -s /bin/bash developer \\
-    && echo "developer ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/developer
+# ubuntu:24.04 ships a default 'ubuntu' user/group at UID/GID 1000, which
+# collides with a host UID/GID of 1000. Free whatever currently holds the
+# target UID/GID *before* creating 'developer', so useradd never fails with
+# "UID already in use" (exit 4).
+RUN set -eux; \\
+    userdel -rf ubuntu 2>/dev/null || true; \\
+    if getent passwd \${HOST_UID} >/dev/null; then \\
+        userdel -rf "\$(getent passwd \${HOST_UID} | cut -d: -f1)" 2>/dev/null || true; \\
+    fi; \\
+    if getent group \${HOST_GID} >/dev/null; then \\
+        groupmod -n developer "\$(getent group \${HOST_GID} | cut -d: -f1)" 2>/dev/null || true; \\
+    else \\
+        groupadd -g \${HOST_GID} developer; \\
+    fi; \\
+    useradd -m -u \${HOST_UID} -g \${HOST_GID} -s /bin/bash developer; \\
+    echo "developer ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/developer
 
 USER developer
 WORKDIR /workspace
