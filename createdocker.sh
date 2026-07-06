@@ -220,7 +220,9 @@ if [[ -n "$src" && "$src" != "$SCRIPT_DIR" ]]; then
 fi
 
 green "Entering '$CONTAINER_NAME'  (/workspace -> $SCRIPT_DIR)"
-exec docker exec -it "$CONTAINER_NAME" \
+# IS_SANDBOX=1 tells Claude Code this is an isolated container, so it allows
+# --dangerously-skip-permissions even though 'developer' has passwordless sudo.
+exec docker exec -it -e IS_SANDBOX=1 "$CONTAINER_NAME" \
     bash -c 'exec claude --dangerously-skip-permissions "$@"' -- "$@"
 EOF
 chmod +x enter-claude.sh 2>/dev/null || true
