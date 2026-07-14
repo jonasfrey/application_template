@@ -10,7 +10,7 @@ if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 #
 #     Dockerfile            container image (edit the EXTRA_APT line per project)
 #     docker-compose.yml    service definition (per-folder container/image)
-#     enter-claude.sh       drop into the container and launch Claude Code
+#     enter-claude.sh       drop into container + launch Claude (asks which API)
 #     .dockerignore         keep the build context small
 #
 # Each project folder gets its OWN container, image and compose project, keyed
@@ -21,7 +21,7 @@ if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 #     cd /path/to/your/project
 #     bash setup-claude-docker.sh           # generate files (won't clobber)
 #     bash setup-claude-docker.sh --force   # overwrite existing files
-#     ./enter-claude.sh                      # build + enter the container
+#     ./enter-claude.sh                      # build + enter; then pick an API
 #
 # Per-project dependencies:
 #     - Edit the "System packages" block in the generated Dockerfile, OR
@@ -220,10 +220,47 @@ if [[ -n "$src" && "$src" != "$SCRIPT_DIR" ]]; then
 fi
 
 green "Entering '$CONTAINER_NAME'  (/workspace -> $SCRIPT_DIR)"
+
+# Ask which API Claude should talk to. Each *.txt in claude_api/ (project root)
+# exports ANTHROPIC_* vars that point Claude at a different endpoint. The folder
+# is bind-mounted into the container at /workspace/claude_api and sourced there
+# (where claude actually runs). To add an API later, just drop another *.txt in
+# claude_api/ — the menu below lists it automatically. The default (or any
+# unlisted choice) = no override, so Claude uses its built-in/default auth.
+# The menu is skipped when stdin is not a TTY (piped/scripted runs) or when no
+# claude_api/*.txt exists: it then defaults to "none", so automation isn't blocked.
+api_files=()
+if [[ -d "$SCRIPT_DIR/claude_api" ]]; then
+    while IFS= read -r f; do
+        api_files+=("$(basename "$f")")
+    done < <(find "$SCRIPT_DIR/claude_api" -maxdepth 1 -type f -name '*.txt' | sort)
+fi
+
+api_file=""
+if [[ -t 0 && ${#api_files[@]} -gt 0 ]]; then
+    echo "Which API do you want to use?"
+    echo "  1) none   (default)"
+    i=2
+    for f in "${api_files[@]}"; do
+        printf '  %d) %s\n' "$i" "${f%.txt}"
+        i=$((i+1))
+    done
+    printf 'Choice (default 1): '
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 2 && choice <= ${#api_files[@]} + 1 )); then
+        api_file="${api_files[$((choice-2))]}"
+    fi
+fi
+
+if [[ -n "$api_file" ]]; then
+    inner_cmd="source /workspace/claude_api/$api_file && exec claude --dangerously-skip-permissions \"\$@\""
+else
+    inner_cmd='exec claude --dangerously-skip-permissions "$@"'
+fi
 # IS_SANDBOX=1 tells Claude Code this is an isolated container, so it allows
 # --dangerously-skip-permissions even though 'developer' has passwordless sudo.
 exec docker exec -it -e IS_SANDBOX=1 "$CONTAINER_NAME" \
-    bash -c 'exec claude --dangerously-skip-permissions "$@"' -- "$@"
+    bash -c "$inner_cmd" -- "$@"
 EOF
 chmod +x enter-claude.sh 2>/dev/null || true
 
@@ -248,4 +285,5 @@ EOF
 
 printf '\n\033[32mDone.\033[0m Next:\n'
 printf '  1. (optional) edit the "System packages" line in ./Dockerfile\n'
-printf '  2. ./enter-claude.sh\n'
+printf '  2. ./enter-claude.sh   # then pick an API from claude_api/*.txt\n'
+printf '     (drop ANTHROPIC_* creds in ./claude_api/<name>.txt; the menu lists them)\n'
